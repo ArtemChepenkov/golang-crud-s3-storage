@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package api_gateway;
+option go_package = "github.com/ArtemChepenkov/golang-crud-s3-storage;api_gateway";
+
+service ApiGatewayService {
+  rpc UploadFile(stream FileChunk) returns (FileUploadResponse);
+
+  rpc DownloadFile(FileDownloadRequest) returns (stream FileChunk);
+  
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  
+  rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
+  
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message FileChunk {
+  string user_id = 1;
+  string filename = 2;
+  bytes chunk_data = 3;
+  int32 chunk_index = 4;
+  bool is_last = 5;
+}
+
+message FileUploadResponse {
+  bool success = 1;
+  string message = 2;
+  string file_url = 3;
+}
+
+message FileDownloadRequest {
+  string user_id = 1;
+  string filename = 2;
+}
+
+message ListFilesRequest {
+  string user_id = 1;
+}
+
+message ListFilesResponse {
+  repeated string filenames = 1;
+}
+
+message DeleteFileRequest {
+  string user_id = 1;
+  string filename = 2;
+}
+
+message DeleteFileResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}
