@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-package api_gateway;
-option go_package = "github.com/ArtemChepenkov/golang-crud-s3-storage;api_gateway";
+package storage_sevice;
+option go_package = "github.com/ArtemChepenkov/golang-crud-s3-storage;storage_service";
 
-service ApiGatewayService {
+service StorageService {
   rpc UploadFile(stream FileChunk) returns (FileUploadResponse);
 
   rpc DownloadFile(FileDownloadRequest) returns (stream FileChunk);
@@ -26,7 +26,6 @@ message FileChunk {
 message FileUploadResponse {
   bool success = 1;
   string message = 2;
-  string file_url = 3;
 }
 
 message FileDownloadRequest {

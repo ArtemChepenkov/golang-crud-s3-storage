@@ -26,6 +26,7 @@ type ServiceConfig struct {
 	GRPCListen string `mapstructure:"grpc_listen"`
 	HTTPListen string `mapstructure:"http_listen"`
 	LogLevel   string `mapstructure:"log_level"`
+	ChunkSize  int    `mapstructure:"chunk_size"`
 }
 
 type DepsConfig struct {

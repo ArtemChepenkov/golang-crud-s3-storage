@@ -1,145 +1,126 @@
-package main
+package kafka
 
 import (
-	"context"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
-
-	pb "github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/proto"
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
+
+	pb "github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/proto"
+	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client"
+	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client"
+	"github.com/ArtemChepenkov/golang-crud-s3-storage/pkg/config"
 )
 
-// FileChunk - структура сообщения (должна совпадать с продюсером)
-type FileChunk struct {
-	UserId    string
-	Filename  string
-	ChunkData []byte
-	ChunkIndex int32
-	IsLast    bool
-}
-
-// FileConsumer - собирает файлы из чанков
 type FileConsumer struct {
-	storageDir  string
-	activeFiles map[string]*os.File // Ключ: userId-filename
-	mu          sync.Mutex
+	cfg             *config.Config
+	activeUploaders map[string]*client.Uploader
+	mu              sync.Mutex
 }
 
-func NewConsumer(storageDir string) *FileConsumer {
-	if err := os.MkdirAll(storageDir, 0755); err != nil {
-		log.Fatalf("Failed to create storage dir: %v", err)
-	}
+func NewFileConsumer(cfg *config.Config) *FileConsumer {
 	return &FileConsumer{
-		storageDir:  storageDir,
-		activeFiles: make(map[string]*os.File),
+		cfg:             cfg,
+		activeUploaders: make(map[string]*client.Uploader),
 	}
 }
 
+// HandleMessage вызывается при получении сообщения из Kafka
 func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 	var chunk pb.FileChunk
 	if err := proto.Unmarshal(msg.Value, &chunk); err != nil {
-		return fmt.Errorf("protobuf decode error: %v", err)
+		return fmt.Errorf("protobuf decode error: %v\n", err)
 	}
 
 	key := fmt.Sprintf("%s-%s", chunk.UserId, chunk.Filename)
-	filePath := filepath.Join(c.storageDir, chunk.UserId, chunk.Filename)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Открываем или создаем файл
-	file, exists := c.activeFiles[key]
+	// проверяем, есть ли активный стрим
+	uploader, exists := c.activeUploaders[key]
 	if !exists {
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			return fmt.Errorf("create dir error: %v", err)
-		}
-		f, err := os.Create(filePath)
+		u, err := client.NewUploader(c.cfg)
 		if err != nil {
-			return fmt.Errorf("file create error: %v", err)
+			return fmt.Errorf("failed to create uploader: %v\n", err)
 		}
-		c.activeFiles[key] = f
-		file = f
-		log.Printf("Started new file: %s", filePath)
+		c.activeUploaders[key] = u
+		uploader = u
+		log.Printf("Started upload for %s\n", key)
 	}
 
-	// Записываем чанк
-	if _, err := file.Write(chunk.ChunkData); err != nil {
-		return fmt.Errorf("write error: %v", err)
+	// отправляем чанк в gRPC
+	if err := uploader.SendChunk(&chunk); err != nil {
+		return fmt.Errorf("failed to send chunk: %v\n", err)
 	}
 
-	// Если последний чанк - закрываем файл
+	// если последний чанк, то закрываем стрим и очищаем карту
 	if chunk.IsLast {
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("file close error: %v", err)
+		if _, err := uploader.Close(); err != nil {
+			return fmt.Errorf("failed to close uploader: %v\n", err)
 		}
-		delete(c.activeFiles, key)
-		log.Printf("Completed file: %s (%d bytes)", filePath, chunk.ChunkIndex+1)
+		delete(c.activeUploaders, key)
+		log.Printf("Completed upload for %s\n", key)
 	}
 
 	return nil
 }
 
-func main() {
-	// Конфигурация
-	time.Sleep(10*time.Second)
-	kafkaBrokers := []string{"kafka:9092"} // Укажите свои брокеры
-	topic := "object.events"                    // Укажите свой топик
-	storageDir := "./storage"                  // Директория для сохранения
 
-	// Инициализация консьюмера
-	consumer := NewConsumer(storageDir)
+func main() {
+	// Загружаем конфиг
+	cfg := config.LoadConfig("./pkg/config")
+
+	// Немного ждем, пока Kafka поднимется (лучше потом health-checkами заменить)
+	time.Sleep(5 * time.Second)
+
+	// Инициализация FileConsumer
+	fileConsumer := NewFileConsumer(cfg)
 
 	// Настройка Kafka consumer
-	config := sarama.NewConfig()
-	config.Consumer.Offsets.Initial = sarama.OffsetOldest // Читать с начала
+	kafkaCfg := sarama.NewConfig()
+	kafkaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
 
 	// Создаем consumer group
-	consumerGroup, err := sarama.NewConsumerGroup(kafkaBrokers, "file-consumer-group", config)
+	consumerGroup, err := sarama.NewConsumerGroup(
+		cfg.Kafka.Brokers,
+		"1",
+		kafkaCfg,
+	)
 	if err != nil {
 		log.Fatalf("Error creating consumer group: %v", err)
 	}
 	defer consumerGroup.Close()
 
-	// Обработчик для Sarama
-	handler := consumerHandler{consumer}
+	handler := consumerHandler{consumer: fileConsumer}
 
-	// Запускаем бесконечный цикл потребления
-	ctx := context.Background()
-	for {
-		if err := consumerGroup.Consume(ctx, []string{topic}, handler); err != nil {
-			log.Printf("Consume error: %v", err)
-			time.Sleep(5 * time.Second)
+	// Контекст с отменой по сигналу (graceful shutdown)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		for {
+			if err := consumerGroup.Consume(ctx, []string{cfg.KafkaTopic}, handler); err != nil {
+				log.Printf("Consume error: %v", err)
+				time.Sleep(5 * time.Second)
+			}
+			// если контекст отменён — выходим
+			if ctx.Err() != nil {
+				return
+			}
 		}
-	}
-}
+	}()
 
-// Реализация интерфейса sarama.ConsumerGroupHandler
-type consumerHandler struct {
-	*FileConsumer
-}
-
-func (h consumerHandler) Setup(sarama.ConsumerGroupSession) error {
-	log.Println("Consumer is starting...")
-	return nil
-}
-
-func (h consumerHandler) Cleanup(sarama.ConsumerGroupSession) error {
-	log.Println("Consumer is shutting down...")
-	return nil
-}
-
-func (h consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for msg := range claim.Messages() {
-		if err := h.HandleMessage(msg); err != nil {
-			log.Printf("Failed to process message (offset %d): %v", msg.Offset, err)
-			continue
-		}
-		session.MarkMessage(msg, "")
-	}
-	return nil
+	// Ждём SIGINT/SIGTERM
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigchan
+	log.Println("Shutting down consumer...")
+	cancel()
 }

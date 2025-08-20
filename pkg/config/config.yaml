@@ -4,6 +4,7 @@ service:
   grpc_listen: "0.0.0.0:50051"
   http_listen: "0.0.0.0:8080"
   log_level: "info"
+  chunk_size: 1024
 
 deps:
   file_service_addr: "localhost:50051"
