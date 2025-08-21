@@ -7,12 +7,13 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 	"path/filepath"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	pb "github.com/ArtemChepenkov/golang-crud-s3-storage/services/storage-service/proto"
-	pb "github.com/ArtemChepenkov/golang-crud-s3-storage/pkg/config"
+	"github.com/ArtemChepenkov/golang-crud-s3-storage/pkg/config"
 	"google.golang.org/grpc"
 )
 
@@ -80,12 +81,11 @@ func (s *StorageServer) UploadFile(stream pb.StorageService_UploadFileServer) er
 					})
 				}
 
-				fileURL := fmt.Sprintf("http://%s/%s/%s", s.minioClient.EndpointURL().Host, s.bucketName, objectName)
+				//fileURL := fmt.Sprintf("http://%s/%s/%s", s.minioClient.EndpointURL().Host, s.bucketName, objectName)
 
 				return stream.SendAndClose(&pb.FileUploadResponse{
 					Success: true,
 					Message: "file uploaded",
-					FileUrl: fileURL,
 				})
 			}
 			return stream.SendAndClose(&pb.FileUploadResponse{
@@ -121,6 +121,7 @@ func (s *StorageServer) UploadFile(stream pb.StorageService_UploadFileServer) er
 }
 
 func main() {
+	time.Sleep(10*time.Second)
 	cfg := config.LoadConfig("./pkg/config")
 	endpoint := cfg.Minio.Endpoint
 	accessKey := cfg.Minio.AccessKey

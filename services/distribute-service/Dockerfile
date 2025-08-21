@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.24-alpine
 
 WORKDIR /app
 
@@ -7,13 +7,10 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o distribute-service ./services/distribute-service/kafka
+RUN go build -o distribute-service ./services/distribute-service
 
-FROM alpine:latest
-WORKDIR /app
-
-COPY --from=builder /app/distribute-service .
-COPY --from=builder /app/pkg/config/config.yaml ./config.yaml
+RUN chmod +x distribute-service
 
 RUN mkdir -p /data/storage
-CMD ["./distribute-service"]
+
+ENTRYPOINT ["./distribute-service"]

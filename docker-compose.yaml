@@ -29,6 +29,39 @@ services:
     networks:
       - kafka-network
 
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_DB: filestorage
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - kafka-network
+
+  metadata-service:
+    build:
+      context: .
+      dockerfile: ./services/metadata-service/Dockerfile
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: metadata_db
+      GRPC_PORT: ":50052"
+    depends_on:
+      - postgres
+    ports:
+      - "50052:50052"
+    networks:
+      - kafka-network
+
   api-gateway:
     build:
       context: .
@@ -47,12 +80,6 @@ services:
     build:
       context: .
       dockerfile: ./services/distribute-service/Dockerfile
-    environment:
-      KAFKA_BROKERS: "kafka:9092"
-      KAFKA_TOPIC: "object.events"
-      KAFKA_GROUP_ID: "file-consumer-group"
-      STORAGE_PATH: "/data/storage"
-      MINIO_BUCKET: "files"
     volumes:
       - file-storage:/data/storage
     depends_on:
@@ -80,6 +107,9 @@ services:
     image: quay.io/minio/minio:latest
     container_name: minio
     command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
     ports:
       - "9000:9000"   # API
       - "9001:9001"   # Web Console
@@ -91,6 +121,7 @@ services:
 volumes:
   file-storage:
   minio-data:
+  postgres-data:
 
 networks:
   kafka-network:

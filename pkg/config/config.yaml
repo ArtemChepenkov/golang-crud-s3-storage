@@ -7,15 +7,15 @@ service:
   chunk_size: 1024
 
 deps:
-  file_service_addr: "localhost:50051"
-  metadata_service_addr: "localhost:50052"
+  file_service_addr: "storage-service:50051"
+  metadata_service_addr: "metadata-service:50052"
 
 minio:
-  endpoint: "localhost:9000"
+  endpoint: "minio:9000"
   use_ssl: false
   bucket_default: "filestore"
-  access_key: "minio_access"
-  secret_key: "minio_secret"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
 
 cassandra:
   enabled: true
@@ -25,8 +25,8 @@ cassandra:
   consistency: "QUORUM"
 
 postgres:
-  enabled: false
-  host: "localhost"
+  enabled: true
+  host: "postgres"
   port: 5432
   db: "filestorage"
   user: "postgres"

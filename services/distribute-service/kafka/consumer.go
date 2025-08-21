@@ -1,33 +1,36 @@
 package kafka
 
 import (
+	_ "context"
+	"strings"
 	"fmt"
 	"log"
+	_ "os"
+	_ "os/signal"
 	"sync"
-	"time"
-	"context"
-	"os"
-	"os/signal"
-	"syscall"
+	_ "syscall"
+	_ "time"
+	_ "context"
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/proto"
-	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client"
-	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client"
+	//pb_metadata "github.com/ArtemChepenkov/golang-crud-s3-storage/services/metadata-service/proto"
+	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client/storage"
+	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client/metadata"
 	"github.com/ArtemChepenkov/golang-crud-s3-storage/pkg/config"
 )
 
 type FileConsumer struct {
 	cfg             *config.Config
-	activeUploaders map[string]*client.Uploader
+	activeUploaders map[string]*storage.Uploader
 	mu              sync.Mutex
 }
 
 func NewFileConsumer(cfg *config.Config) *FileConsumer {
 	return &FileConsumer{
 		cfg:             cfg,
-		activeUploaders: make(map[string]*client.Uploader),
+		activeUploaders: make(map[string]*storage.Uploader),
 	}
 }
 
@@ -35,7 +38,7 @@ func NewFileConsumer(cfg *config.Config) *FileConsumer {
 func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 	var chunk pb.FileChunk
 	if err := proto.Unmarshal(msg.Value, &chunk); err != nil {
-		return fmt.Errorf("protobuf decode error: %v\n", err)
+		return fmt.Errorf("protobuf decode error: %v", err)
 	}
 
 	key := fmt.Sprintf("%s-%s", chunk.UserId, chunk.Filename)
@@ -46,81 +49,84 @@ func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 	// проверяем, есть ли активный стрим
 	uploader, exists := c.activeUploaders[key]
 	if !exists {
-		u, err := client.NewUploader(c.cfg)
+		u, err := storage.NewUploader(c.cfg)
 		if err != nil {
-			return fmt.Errorf("failed to create uploader: %v\n", err)
+			return fmt.Errorf("failed to create uploader: %v", err)
 		}
 		c.activeUploaders[key] = u
 		uploader = u
 		log.Printf("Started upload for %s\n", key)
 	}
 
-	// отправляем чанк в gRPC
+	// отправляем чанк в gRPC (MinIO сервис)
 	if err := uploader.SendChunk(&chunk); err != nil {
-		return fmt.Errorf("failed to send chunk: %v\n", err)
+		return fmt.Errorf("failed to send chunk: %v", err)
 	}
 
 	// если последний чанк, то закрываем стрим и очищаем карту
 	if chunk.IsLast {
-		if _, err := uploader.Close(); err != nil {
-			return fmt.Errorf("failed to close uploader: %v\n", err)
+		resp, err := uploader.Close()
+		if err != nil {
+			return fmt.Errorf("failed to close uploader: %v", err)
 		}
 		delete(c.activeUploaders, key)
-		log.Printf("Completed upload for %s\n", key)
+		log.Printf("Completed upload for %s, stored as: %s\n", key, resp.Message)
+
+		// вызов Metadata Client
+		metaClient := metadata.NewMetadataClient(c.cfg.Deps.MetadataServiceAddr)
+
+		err = metaClient.SaveFileMetadata(chunk.UserId, ExtractFilename(chunk.Filename), chunk.Filename)
+		if err != nil {
+			return fmt.Errorf("failed to save metadata: %v", err)
+		}
+		log.Printf("Saved metadata for %s\n", key)
 	}
 
 	return nil
 }
 
 
-func main() {
-	// Загружаем конфиг
-	cfg := config.LoadConfig("./pkg/config")
+// consumerHandler реализует интерфейс sarama.ConsumerGroupHandler
+type ConsumerHandler struct {
+	Consumer *FileConsumer
+}
 
-	// Немного ждем, пока Kafka поднимется (лучше потом health-checkами заменить)
-	time.Sleep(5 * time.Second)
+// Setup вызывается перед началом потребления
+func (h ConsumerHandler) Setup(sarama.ConsumerGroupSession) error {
+	log.Println("Consumer group setup")
+	return nil
+}
 
-	// Инициализация FileConsumer
-	fileConsumer := NewFileConsumer(cfg)
+// Cleanup вызывается после завершения потребления
+func (h ConsumerHandler) Cleanup(sarama.ConsumerGroupSession) error {
+	log.Println("Consumer group cleanup")
+	return nil
+}
 
-	// Настройка Kafka consumer
-	kafkaCfg := sarama.NewConfig()
-	kafkaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
+// ConsumeClaim - основной метод обработки сообщений
+func (h ConsumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for message := range claim.Messages() {
+		log.Printf("Received message: Topic=%s, Partition=%d, Offset=%d",
+			message.Topic, message.Partition, message.Offset)
 
-	// Создаем consumer group
-	consumerGroup, err := sarama.NewConsumerGroup(
-		cfg.Kafka.Brokers,
-		"1",
-		kafkaCfg,
-	)
-	if err != nil {
-		log.Fatalf("Error creating consumer group: %v", err)
-	}
-	defer consumerGroup.Close()
-
-	handler := consumerHandler{consumer: fileConsumer}
-
-	// Контекст с отменой по сигналу (graceful shutdown)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		for {
-			if err := consumerGroup.Consume(ctx, []string{cfg.KafkaTopic}, handler); err != nil {
-				log.Printf("Consume error: %v", err)
-				time.Sleep(5 * time.Second)
-			}
-			// если контекст отменён — выходим
-			if ctx.Err() != nil {
-				return
-			}
+		// Обрабатываем сообщение
+		if err := h.Consumer.HandleMessage(message); err != nil {
+			log.Printf("Error processing message: %v", err)
+			// Здесь можно добавить логику повторной обработки или dead letter queue
 		}
-	}()
 
-	// Ждём SIGINT/SIGTERM
-	sigchan := make(chan os.Signal, 1)
-	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigchan
-	log.Println("Shutting down consumer...")
-	cancel()
+		// Подтверждаем обработку сообщения
+		session.MarkMessage(message, "")
+	}
+	return nil
+}
+
+
+func ExtractFilename(s string) string {
+    firstDash := strings.Index(s, "-")
+    lastDash := strings.LastIndex(s, "-")
+    if firstDash == -1 || lastDash == -1 || firstDash == lastDash {
+        return ""
+    }
+    return s[firstDash+1 : lastDash]
 }

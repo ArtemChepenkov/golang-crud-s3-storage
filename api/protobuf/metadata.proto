@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package metadata_service;
+option go_package = "github.com/ArtemChepenkov/golang-crud-s3-storage/services/metadata-service/proto;metadata_service";
+
+service MetadataService {
+  rpc SaveFileMetadata (SaveFileMetadataRequest) returns (SaveFileMetadataResponse);
+  rpc GetFileMetadata (GetFileMetadataRequest) returns (GetFileMetadataResponse);
+  rpc ListUserFiles (ListUserFilesRequest) returns (ListUserFilesResponse);
+  rpc DeleteFileMetadata (DeleteFileMetadataRequest) returns (DeleteFileMetadataResponse);
+}
+
+message SaveFileMetadataRequest {
+  string user_id = 1;
+  string original_filename = 2;
+  string stored_filename = 3;
+}
+
+message SaveFileMetadataResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetFileMetadataRequest {
+  string user_id = 1;
+  string original_filename = 2;
+}
+
+message GetFileMetadataResponse {
+  string stored_filename = 1;
+  bool found = 2;
+}
+
+message ListUserFilesRequest {
+  string user_id = 1;
+}
+
+message ListUserFilesResponse {
+  repeated string original_filenames = 1;
+}
+
+message DeleteFileMetadataRequest {
+  string user_id = 1;
+  string original_filename = 2;
+}
+
+message DeleteFileMetadataResponse {
+  bool success = 1;
+  string message = 2;
+}

@@ -1,4 +1,4 @@
-package client
+package storage
 
 import (
 	"context"
@@ -20,6 +20,7 @@ func UploadFileToStorage(
     userID string,
 ) (*pb.FileUploadResponse, error) {
 
+    //conn, err := grpc.Dial(cfg.Deps.FileServiceAddr, grpc.WithInsecure())
     conn, err := grpc.Dial(cfg.Deps.FileServiceAddr, grpc.WithInsecure())
     if err != nil {
         return nil, fmt.Errorf("failed to connect to storage service: %v\n", err)
