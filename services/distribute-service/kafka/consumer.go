@@ -1,21 +1,14 @@
 package kafka
 
 import (
-	_ "context"
 	"strings"
 	"fmt"
 	"log"
-	_ "os"
-	_ "os/signal"
 	"sync"
-	_ "syscall"
-	_ "time"
-	_ "context"
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/proto"
-	//pb_metadata "github.com/ArtemChepenkov/golang-crud-s3-storage/services/metadata-service/proto"
 	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client/storage"
 	"github.com/ArtemChepenkov/golang-crud-s3-storage/services/distribute-service/client/metadata"
 	"github.com/ArtemChepenkov/golang-crud-s3-storage/pkg/config"
@@ -34,7 +27,6 @@ func NewFileConsumer(cfg *config.Config) *FileConsumer {
 	}
 }
 
-// HandleMessage вызывается при получении сообщения из Kafka
 func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 	var chunk pb.FileChunk
 	if err := proto.Unmarshal(msg.Value, &chunk); err != nil {
@@ -46,7 +38,6 @@ func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// проверяем, есть ли активный стрим
 	uploader, exists := c.activeUploaders[key]
 	if !exists {
 		u, err := storage.NewUploader(c.cfg)
@@ -58,12 +49,10 @@ func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 		log.Printf("Started upload for %s\n", key)
 	}
 
-	// отправляем чанк в gRPC (MinIO сервис)
 	if err := uploader.SendChunk(&chunk); err != nil {
 		return fmt.Errorf("failed to send chunk: %v", err)
 	}
 
-	// если последний чанк, то закрываем стрим и очищаем карту
 	if chunk.IsLast {
 		resp, err := uploader.Close()
 		if err != nil {
@@ -72,7 +61,6 @@ func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 		delete(c.activeUploaders, key)
 		log.Printf("Completed upload for %s, stored as: %s\n", key, resp.Message)
 
-		// вызов Metadata Client
 		metaClient := metadata.NewMetadataClient(c.cfg.Deps.MetadataServiceAddr)
 
 		err = metaClient.SaveFileMetadata(chunk.UserId, ExtractFilename(chunk.Filename), chunk.Filename)
@@ -86,36 +74,29 @@ func (c *FileConsumer) HandleMessage(msg *sarama.ConsumerMessage) error {
 }
 
 
-// consumerHandler реализует интерфейс sarama.ConsumerGroupHandler
 type ConsumerHandler struct {
 	Consumer *FileConsumer
 }
 
-// Setup вызывается перед началом потребления
 func (h ConsumerHandler) Setup(sarama.ConsumerGroupSession) error {
 	log.Println("Consumer group setup")
 	return nil
 }
 
-// Cleanup вызывается после завершения потребления
 func (h ConsumerHandler) Cleanup(sarama.ConsumerGroupSession) error {
 	log.Println("Consumer group cleanup")
 	return nil
 }
 
-// ConsumeClaim - основной метод обработки сообщений
 func (h ConsumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
 		log.Printf("Received message: Topic=%s, Partition=%d, Offset=%d",
 			message.Topic, message.Partition, message.Offset)
 
-		// Обрабатываем сообщение
 		if err := h.Consumer.HandleMessage(message); err != nil {
 			log.Printf("Error processing message: %v", err)
-			// Здесь можно добавить логику повторной обработки или dead letter queue
 		}
 
-		// Подтверждаем обработку сообщения
 		session.MarkMessage(message, "")
 	}
 	return nil

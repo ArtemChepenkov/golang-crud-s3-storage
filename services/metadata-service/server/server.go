@@ -2,12 +2,8 @@ package server
 
 import (
 	"context"
-	_ "log"
-	_ "net"
 
 	pb "github.com/ArtemChepenkov/golang-crud-s3-storage/services/metadata-service/proto"
-	_ "google.golang.org/grpc"
-	_ "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 

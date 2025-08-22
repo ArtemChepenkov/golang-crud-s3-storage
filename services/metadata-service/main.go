@@ -15,10 +15,8 @@ import (
 
 func main() {
 	time.Sleep(10*time.Second)
-	// загружаем конфиг
 	cfg := config.LoadConfig("./pkg/config")
 
-	// подключение к Postgres из конфига
 	dsn := fmt.Sprintf(
 		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
 		cfg.Postgres.Host,
@@ -34,7 +32,6 @@ func main() {
 	}
 	db.AutoMigrate(&metadataServer.FileMetadata{})
 
-	// стартуем gRPC сервер на адресе из конфига
 	addr := cfg.Deps.MetadataServiceAddr
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {

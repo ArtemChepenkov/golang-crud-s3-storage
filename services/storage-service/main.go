@@ -32,7 +32,6 @@ func NewStorageServer(endpoint, accessKey, secretKey, bucketName string, useSSL 
 		return nil, fmt.Errorf("failed to init minio client: %v", err)
 	}
 
-	// создаём бакет, если нет
 	ctx := context.Background()
 	exists, err := minioClient.BucketExists(ctx, bucketName)
 	if err != nil {
@@ -62,7 +61,6 @@ func (s *StorageServer) UploadFile(stream pb.StorageService_UploadFileServer) er
 	for {
 		chunk, err := stream.Recv()
 		if err == io.EOF {
-			// закрываем и отправляем в minio
 			if tmpFile != nil {
 				tmpFile.Close()
 				objectName := filepath.Base(finalName)
@@ -81,7 +79,6 @@ func (s *StorageServer) UploadFile(stream pb.StorageService_UploadFileServer) er
 					})
 				}
 
-				//fileURL := fmt.Sprintf("http://%s/%s/%s", s.minioClient.EndpointURL().Host, s.bucketName, objectName)
 
 				return stream.SendAndClose(&pb.FileUploadResponse{
 					Success: true,
@@ -97,7 +94,6 @@ func (s *StorageServer) UploadFile(stream pb.StorageService_UploadFileServer) er
 			return fmt.Errorf("recv error: %v", err)
 		}
 
-		// инициализация временного файла при первом чанке
 		if tmpFile == nil {
 			userID = chunk.UserId
 			finalName = chunk.Filename
@@ -113,12 +109,78 @@ func (s *StorageServer) UploadFile(stream pb.StorageService_UploadFileServer) er
 			}
 		}
 
-		// пишем чанк в файл
 		if _, err := tmpFile.Write(chunk.ChunkData); err != nil {
 			return fmt.Errorf("write chunk error: %v", err)
 		}
 	}
 }
+
+func (s *StorageServer) DownloadFile(req *pb.FileDownloadRequest, stream pb.StorageService_DownloadFileServer) error {
+	ctx := context.Background()
+	objectName := req.Filename
+
+	obj, err := s.minioClient.GetObject(ctx, s.bucketName, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("minio getobject error: %w", err)
+	}
+	defer obj.Close()
+
+	buf := make([]byte, 1024*1024)
+	var idx int32 = 0
+	for {
+		n, rerr := obj.Read(buf)
+		if n > 0 {
+			ch := &pb.FileChunk{
+				UserId:     req.UserId,
+				Filename:   objectName,
+				ChunkData:  buf[:n],
+				ChunkIndex: idx,
+				IsLast:     false,
+			}
+			if rerr == io.EOF {
+				ch.IsLast = true
+			}
+			if err := stream.Send(ch); err != nil {
+				return fmt.Errorf("stream send error: %w", err)
+			}
+			idx++
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("read object error: %w", rerr)
+		}
+	}
+}
+
+func (s *StorageServer) DeleteFile(ctx context.Context, req *pb.DeleteFileRequest) (*pb.DeleteFileResponse, error) {
+	err := s.minioClient.RemoveObject(ctx, s.bucketName, req.Filename, minio.RemoveObjectOptions{})
+	if err != nil {
+		return &pb.DeleteFileResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &pb.DeleteFileResponse{Success: true, Message: "deleted"}, nil
+}
+
+
+func (s *StorageServer) ListFiles(ctx context.Context, req *pb.ListFilesRequest) (*pb.ListFilesResponse, error) {
+	objectCh := s.minioClient.ListObjects(ctx, s.bucketName, minio.ListObjectsOptions{
+		Recursive: true,
+	})
+
+	var names []string
+	for obj := range objectCh {
+		if obj.Err != nil {
+			log.Printf("list object error: %v", obj.Err)
+			return nil, obj.Err
+		}
+		names = append(names, obj.Key)
+	}
+
+	return &pb.ListFilesResponse{Filenames: names}, nil
+}
+
+
 
 func main() {
 	time.Sleep(10*time.Second)
