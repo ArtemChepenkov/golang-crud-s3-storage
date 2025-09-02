@@ -1,6 +1,5 @@
 ![Go](https://img.shields.io/badge/Golang-00ADD8?style=for-the-badge&logo=go&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
-![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)
 ![gRPC](https://img.shields.io/badge/gRPC-4A154B?style=for-the-badge&logo=grpc&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)
@@ -50,3 +49,4 @@ curl -X GET \
 curl -X DELETE \
   "http://localhost:8080/api/v1/files/delete/123?filename=test.c&userId=123"
 ```
+
